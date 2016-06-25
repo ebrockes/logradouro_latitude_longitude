@@ -17,7 +17,7 @@ from .forms import PevForm, PevForm2, PevForm3
 from .models import Pev, PevTipoResiduo
 
 from cities_light import models as model_cities
-from cities_light.models import Region, City
+from cities_light.models import Region, City, Country
 
 
 #se alterar, alterar também PevSearch
@@ -549,8 +549,6 @@ def _search_lat_lng(temp, numero):
 			address_text = temp.cidade.name + ',' + temp.cidade.region.name +  ', Brazil'
 			address_text = urllib.parse.quote(address_text)
 			search_url = "http://maps.googleapis.com/maps/api/geocode/json?address=" + address_text
-	
-	print(search_url)
 
 	try:
     		raw = urllib.request.urlopen(search_url, timeout=10)
@@ -574,33 +572,82 @@ def _search_lat_lng(temp, numero):
 
 
 def _search_correio(temp):
-	if(temp.cep.isnumeric()):
-		search_url = "http://republicavirtual.com.br/web_cep.php?cep=" + temp.cep
-		import simplejson as json
-		import urllib.request
-		import re
+
+	from socket import timeout
+	import urllib.request
+	import xml.etree.cElementTree as ET
 	
-		raw = urllib.request.urlopen(search_url)
-		js = raw.readlines()
+	search_url = None
+	raw = None
 
-		#temp = Pev()
-		temp.nome = re.sub('<[^>]*>', '', js[2].decode("latin1"))
-		if('1' in temp.nome):
-			uf_abreviacao = re.sub('<[^>]*>', '', js[4].decode("latin1"))
-			cidade_nome = re.sub('<[^>]*>', '', js[5].decode("latin1"))
-			result = _get_cidade(cidade_nome, uf_abreviacao)		
-			if(result):
-				temp.cidade = result
-				if js[6] != None:
-					temp.bairro = re.sub('<[^>]*>', '', js[6].decode("latin1"))
-				if js[7] != None or js[8] != None:
-					temp.logradouro = re.sub('<[^>]*>', '', js[7].decode("latin1") + ' ' + js[8].decode("latin1"))
+	if(temp.cep.isnumeric()):
 
+		search_url = "http://republicavirtual.com.br/web_cep.php?cep=" + temp.cep
+
+		try:
+	    		raw = urllib.request.urlopen(search_url, timeout=10)
+		except (urllib.error.HTTPError, urllib.error.URLError) as error:
+    			print(error)
+		except timeout:
+    			print('socket timed out - URL ' + search_url)
+
+		if(raw):
+			js = raw.read()
+			js = js.decode("latin-1")
+
+			print("1")
+
+			root = ET.fromstring(js)
+			resultado = root.findall("resultado")[0].text
+
+			if(resultado == '1' or resultado == '2'):
+				uf_abreviacao = root.findall("uf")[0].text
+				cidade_nome = root.findall("cidade")[0].text
+
+				print('2')
+				
+				result = _get_cidade(cidade_nome, uf_abreviacao)
+				if(result):
+					temp.cidade = result				
+				else:
+					temp.cidade = _saveCidade(cidade_nome, uf_abreviacao)
+
+				temp.bairro = root.findall("bairro")[0].text
+				temp.logradouro = root.findall("logradouro")[0].text
 				temp = _search_lat_lng(temp, 0)
 				return temp
+
 			else:
 				return None
 		else:
 			return None 
+	else:
+		return None
+
+
+
+def _saveCidade(nomeCidade, ufAbreviacao):
+
+	dict_uf = {'AC': 'Acre', 'AL': 'Alagoas', 'AP': 'Amapá', 'AM': 'Amazonas', 
+		'BA': 'Bahia', 'CE': 'Ceará', 'DF': 'Distrito Federal', 'ES': 'Espírito Santo', 
+		'GO': 'Goiás', 'MA': 'Maranhão', 'MT': 'Mato Grosso', 'MS': 'Mato Grosso do Sul',
+		'MG': 'Minas Gerais', 'PA': 'Pará', 'PB': 'Paraíba', 'PR': 'Paraná', 'PE': 'Pernambuco',
+		'PI': 'Piauí', 'RJ': 'Rio de Janeiro', 'RN': 'Rio Grande do Norte', 'RS': 'Rio Grande do Sul',
+		'RO': 'Rondônia', 'RR': 'Roraima', 'SC': 'Santa Catarina', 'SP': 'São Paulo', 'SE': 'Sergipe', 'TO': 'Tocantins'}
+
+	region_name = None
+	for key, value in dict_uf.items():
+		if key in ufAbreviacao:
+			region_name = value
+
+	if region_name:	
+		c = City()
+		c.name = nomeCidade
+		region = Region.objects.filter(name = region_name, country__id = 31)[0]
+		c.region = region
+		c.country = Country.objects.get(pk = 31)
+		c.save()
+	
+		return c
 	else:
 		return None
